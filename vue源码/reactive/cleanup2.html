@@ -1,0 +1,77 @@
+<body></body>
+<script>
+  const bucket = new WeakMap
+  let activeEffect = null
+
+  function reactive(obj) {
+    return new Proxy(obj, {
+      get(target, key) {
+        tracker(target, key)
+        return target[key]
+      },
+      set(target, key, val) { 
+        // trigger(target, key)
+        // target[key] = val
+        // 先触发trigger在设置的是错误的，会导致effect函数执行的时候拿不到新的值。
+        target[key] = val
+        trigger(target, key)
+        return true
+      }
+    })
+  }
+  function effect(fn) {
+    const effectFn = () => {
+      cleanup(effectFn)
+      activeEffect = effectFn
+      fn()
+    }
+    effectFn.deps = []
+    effectFn()
+  }
+  function tracker(target, key) {
+    if (!activeEffect) return
+    let depsMap = bucket.get(target)
+    if (!depsMap) {
+      bucket.set(target, (depsMap = new Map))
+    }
+    let deps = depsMap.get(key)
+    if (!deps) {
+      depsMap.set(key, (deps = new Set))
+    }
+    deps.add(activeEffect)
+    activeEffect.deps.push(deps)  // 通过effectFn.deps保存同一个effect函数
+  }
+  function trigger(target, key) {
+    const depsMap = bucket.get(target)
+    if (!depsMap) return
+    const effects = depsMap.get(key)
+    const effectToRun = new Set(effects)
+    effectToRun && effectToRun.forEach(fn => fn())
+    // effects && effects.forEach(fn => fn()) 
+    // cleanup执行的时候会删除依赖,而fn()执行的时候会添加依赖，
+    // 一增一减都是在同一个set上因此会导致无限循环。
+  }
+  function cleanup(effectFn) {
+    for (let i = 0; i < effectFn.deps.length; i++) {
+      const deps = effectFn.deps[i]
+      deps.delete(effectFn)
+    }
+    effectFn.deps.length = 0
+  }
+
+  const proxyObj = reactive({
+    ok: true,
+    text: 'hello world'
+  })
+  effect(() => {
+    console.info('effect 分支')
+    document.body.innerText = proxyObj.ok ? proxyObj.text : 'not'  
+  })
+  proxyObj.ok = false
+  proxyObj.text = 'hello vue3'
+  // 1. effect初次执行由于ok和text的值能够访问到，会触发ok和text的依赖收集。
+  // 2. proxyObj.ok的时候会触发ok的effect执行，此时通过effectFn.deps拿到effect函数吃的依赖，全部cleanup掉。
+  // 3. 由于此次effect的fn执行的时候能够访问到proxy.ok,导致proxy.ok被在此收集，而proxy.text 由于proyx.ok等于0
+  // 无法访问到因此就没有在进行依赖收集，最终proxy.text赋值触发trigger的时候没有相应的依赖执行。
+
+</script>

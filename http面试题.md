@@ -38,3 +38,65 @@ function quickSort(arr) {
   return quickSort(left).concat(priovt, quickSort(right))
 }
 ```
+
+import store '@/store/index.js'
+	export default {
+		name: 'Index',
+		data() {
+			return {
+				date: getDateStr('MM-YYYY'),
+				monthsTitleStyle : {
+					"fontSize": "16px",
+					"background": "#ffda47"
+				},
+				yearsTitelStyle: {
+					"background": "#ffda47"
+				}
+			}
+		},
+		computed: {
+			allBills: function () {
+				return store.getters.allBills.filter(item => {
+					return getDateStr('MM-YYYY', item.date) === this.date
+				})
+			},
+			allInComeByDate: function () {
+				return this.getInOrOutCome('+')
+			},
+			allOutComeByDate: function () {
+				return this.getInOrOutCome('-')
+			},
+			bills = function () {
+				return this.allBills.reduce((acc, curr) => {
+					const date = getDateStr('YYYY-M-D', curr.date)
+					if (!acc.hasOwnProperty(date)) {
+						acc[date] = {
+							list: [],
+							'total': 0
+						}
+					}
+					acc[date].list.push(curr)
+					curr.type === '+' ? (acc[date].total += curr.amount) : 
+						(acc[date].total -= curr.amount)
+					return acc
+				}, {})
+			}
+		},
+		methods: {
+			getInOrOutCome: function (inOrOut) {
+				return this.allBills.filter(item => {
+					return item.type === inOrOut && (getDateStr('MM-YYYY', item.date) === this.date)
+				}).reduce((acc, curr) => {
+					return acc + curr.amount
+				}, 0)
+			},
+			yearSelectHandle: function (newDate) {
+				const dateStr = this.date.split('-')
+				this.date = dateStr[0] + '-' + newDate	
+			},
+			monthSelectHandle: function (newDate) {
+				const dateStr = this.date.split('-')
+				this.date = newDate + '-' + dateStr[1]
+			},
+		}
+	}

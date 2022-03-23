@@ -1,0 +1,389 @@
+<script>
+  const state = {
+    initial: 1,
+    tagOpen: 2,
+    tagName: 3,
+    text: 4,
+    tagEnd: 5,
+    tagEndName: 6
+  }
+
+  function isAlpa(c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+  }
+
+  function tokenizer(str) {
+    str = str.replace(/^\s|\s$/g, '')
+    let currentState = state.initial
+    const tokens = []
+    const chars = []
+
+    while (str) {
+      let c = str[0]
+      switch (currentState) {
+        case state.initial:
+          if (c === '<') {
+            currentState = state.tagOpen
+            str = str.slice(1)
+          } else if (isAlpa(c)) {
+            currentState = state.text
+            chars.push(c)
+            str = str.slice(1)
+          }
+          break
+        case state.tagOpen:
+          if (isAlpa(c)) {
+            currentState = state.tagName
+            chars.push(c)
+            str = str.slice(1)
+          } else if (c === '/') {
+            currentState = state.tagEnd
+            str = str.slice(1)
+          }
+          break
+        case state.tagName:
+          if (isAlpa(c)) {
+            chars.push(c)
+            str = str.slice(1)
+          } else if (c === '>') {
+            currentState = state.initial
+            str = str.slice(1)
+            tokens.push({
+              type: 'tag',
+              name: chars.join('')
+            })
+            chars.length = 0
+          }
+          break
+        case state.text:
+          if (isAlpa(c)) {
+            chars.push(c)
+            str = str.slice(1)
+          } else if (c === '<') {
+            currentState = state.tagOpen
+            tokens.push({
+              type: 'text',
+              content: chars.join('')
+            })
+            chars.length = 0
+            str = str.slice(1)
+          }
+          break
+        case state.tagEnd:
+          if (isAlpa(c)) {
+            currentState = state.tagEndName
+            chars.push(c)
+            str = str.slice(1)
+          }
+          break
+        case state.tagEndName:
+          if (isAlpa(c)) {
+            chars.push(c)
+            str = str.slice(1)
+          } else if (c === '>') {
+            currentState = state.initial
+            tokens.push({
+              type: 'tagEnd',
+              name: chars.join('')
+            })
+            str = str.slice(1)
+            chars.length = 0
+          }
+         break
+      }
+    }
+    return tokens
+  }
+
+  // const tokens = tokenizer('<div><p>vue</p><p>tempalte</p></div>')
+  // console.info(tokens)
+  function parse(str) {
+    const tokens = tokenizer(str)
+
+    const root = {
+      type: 'root',
+      children: []
+    }
+
+    const statck = [root]
+    while(tokens.length) {
+      const parent = statck[statck.length - 1]
+
+      const token = tokens[0]
+      switch(token.type) {
+        case 'tag':
+          const element = {
+            type: 'element',
+            tag: token.name,
+            children: []
+          }
+          parent.children.push(element)
+          statck.push(element)
+          break
+        case 'text':
+          const textNode = {
+            type: 'text',
+            content: token.content
+          }
+          parent.children.push(textNode)
+          break
+        case 'tagEnd':
+          statck.pop()
+          break
+      }
+      tokens.shift()
+    }
+
+    return root
+  }
+  
+  function dump(node, indent = 0) {
+    const type = node.type
+    const desc = node.type === 'root' ? ''
+      : node.type === 'element' ? node.tag : node.content
+    
+    console.info(`${'-'.repeat(indent)}${type}:${desc}`)
+    if (node.children) {
+      node.children.forEach(n => dump(n, indent + 2))
+    }
+  }
+
+  function traverseNode(ast, context) {
+    const currentNode = ast
+    context.currentNode = currentNode
+
+    const fnExits = []
+    for (let i = 0; i < context.nodeTransform.length; i++) {
+      const fn = context.nodeTransform[i](currentNode, context)
+      fnExits.push(fn)
+      if (!context.currentNode) return // 被removeNode之后就不需要处理后续的步
+    }
+
+    if (currentNode.children) {
+      for (let i = 0; i < currentNode.children.length; i++) {
+        context.childIndex = i
+        context.parent = currentNode
+        traverseNode(currentNode.children[i], context)
+      }
+    }
+
+    let l = fnExits.length
+    while(l--) {
+      fnExits[l] && fnExits[l]()
+    }
+  }
+
+  function transform(ast) {
+    const context = {
+      currentNode: null,
+      childIndex: 0,
+      parent: null,
+      replaceNode(node) {
+        context.parent.children[context.childIndex] = node
+        context.currentNode = node
+      },
+      removeNode(node) {
+        if (context.parent) {
+          context.parent.children.splice(context.childIndex, 1)
+          context.currentNode = null
+        }
+      },
+      nodeTransform: [
+        transformRoot,
+        transformElement,
+        transformText
+      ]
+    }
+
+    traverseNode(ast, context)
+    dump(ast)
+  }
+
+
+  function transformText(node, context) {
+
+    return () => {
+      if (node.type !== 'text') return
+      node.jsNode = createStringLiteral(node.content)
+    }
+  }
+
+  function transformElement(node, context) {
+
+    return () => {
+      if (node.type !== 'element') return
+
+      const callExp = createCallExp('h', [
+        createStringLiteral(node.tag)
+      ])
+
+      node.children.length === 1
+        ? callExp.arguments.push(node.children[0].jsNode)
+        : callExp.arguments.push(createArrayExpression(
+          node.children.map(c => c.jsNode)
+        ))
+      
+      node.jsNode = callExp  
+    }
+  }
+
+  function transformRoot(node) {
+    return () => {
+      if (node.type !== 'root') return
+
+      const vnodeJSAST = node.children[0].jsNode
+
+      node.jsNode = {
+        type: 'FunctionDecl',
+        id: {type: 'Identifier', name: 'render'},
+        params: [],
+        body: [
+          {
+            type: 'ReturnStatement',
+            return: vnodeJSAST
+          }
+        ]
+      }
+    }
+  }
+
+  const callExp = {
+    type: 'CallExpression',
+    callee: {
+      type: 'Identifier',
+      name: 'h'
+    },
+    arguments: []
+  }
+
+
+  function createStringLiteral(value) {
+    return {
+      type: 'StringLiteral',
+      value
+    }
+  }
+
+  function createIdentitier(name) {
+    return {
+      type: 'Identifier',
+      name
+    }
+  }
+
+  function createArrayExpression(elements) {
+    return {
+      type: 'ArrayExpression',
+      elements
+    }
+  }
+
+  function createCallExp(callee, arguments) {
+    return {
+      type: 'CallExpression',
+      callee: createIdentitier(callee),
+      arguments
+    }
+  }
+
+  function generate(node) {
+    const context = {
+      code: '',
+      push(code) {
+        context.code += code
+      },
+      currentIndent: 0,
+      newLine() {
+        context.code += '\n' + ` `.repeat(context.currentIndent)
+      },
+      indent() {
+        context.currentIndent++
+        context.newLine()
+      },
+      deIndent() {
+        context.currentIndent--
+        context.newLine()
+      }
+    }
+
+    genNode(node, context)
+
+    return context.code
+  }
+
+  function genNode(node, context) {
+    switch (node.type) {
+      case 'FunctionDecl':
+        genFuntionDecl(node, context)
+        break
+      case 'ReturnStatement':
+        genRetrunStatement(node, context)
+        break
+      case 'CallExpression':
+        genCallExpression(node, context)
+        break
+      case 'StringLiteral':
+        genStringLiteral(node, context)
+        break
+      case 'ArrayExpression':
+        genArrayExpression(node, context)
+        break  
+    }
+  }
+
+  function genFuntionDecl(node, context) {
+    const { push, indent, deIndent } = context
+    push(`function ${node.id.name}`)
+    push('(')
+    genNodeList(node.params, context)
+    push(')')
+    push('{')
+    indent()
+    node.body.forEach(n => genNode(n, context))
+    deIndent()
+    push('}')
+  }
+
+  function genRetrunStatement(node, context) {
+    const { push } = context
+    push('return ')
+    genNode(node.return, context)
+  }
+
+  function genCallExpression(node, context) {
+    const { push } = context
+    const { callee, arguments: args } = node
+    push(`${callee.name}`)
+    push('(')
+    genNodeList(args, context)
+    push(')')
+  }
+  function genStringLiteral(node, context) {
+    const { push } = context
+    push(`'${node.value}'`)
+  }
+
+  function genArrayExpression(node, context) {
+    const { push } = context
+    push('[')
+    genNodeList(node.elements, context)
+    push(']')
+  }
+
+  function genNodeList(nodes, context) {
+    const { push } = context
+    for (let i = 0; i < nodes.length; i++) {
+      if (!nodes[i]) continue
+      genNode(nodes[i], context)
+
+      if (i < nodes.length - 1) {
+        push(',')
+      }
+    }
+  }
+
+  const root = parse('<div><p>vue</p><p>tempalte</p></div>')
+  transform(root)
+  const code = generate(root.jsNode)
+  console.info(code)
+</script>

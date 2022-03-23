@@ -1,18 +1,19 @@
-<!DOCTYPE html>
-<head>
-  <style>
-    body {
-    }
-    .parent {
-      background-color: yellow;
-      height: 100px;
-      margin: 100px;
-    }
-  </style>
-</head>
-<body>
-  <div class="parent">
-
-  </div>
-  <div class="parent">
-</body>
+<div id="app">
+  水果
+  <!-- 注释-->
+  <p>
+    西瓜
+    <style>
+      red {
+        background-color: red;
+      }
+    </style>
+    <div style = "display: none;">
+      瓜子
+    </div>
+  </p>
+</div>
+<script>
+  const app = document.getElementById('app')
+  console.info(app.children[0].nodeValue)
+</script>

@@ -1,0 +1,116 @@
+<body></body>
+<script>
+  const bucket = new WeakMap
+  let activeEffect = null
+  const effectStack = []
+
+  function reactive(obj) {
+    return new Proxy(obj, {
+      get(target, key) {
+        tracker(target, key)
+        return target[key]
+      },
+      set(target, key, val) { 
+        target[key] = val
+        trigger(target, key)
+        return true
+      }
+    })
+  }
+  function effect(fn, options = {}) {
+    const effectFn = () => {
+      cleanup(effectFn)
+      activeEffect = effectFn
+      effectStack.push(activeEffect)
+      fn()
+      effectStack.pop()
+      activeEffect = effectStack[effectStack.length - 1]
+    }
+    effectFn.deps = []
+    effectFn.options = options
+    effectFn()
+  }
+  function tracker(target, key) {
+    if (!activeEffect) return
+    let depsMap = bucket.get(target)
+    if (!depsMap) {
+      bucket.set(target, (depsMap = new Map))
+    }
+    let deps = depsMap.get(key)
+    if (!deps) {
+      depsMap.set(key, (deps = new Set))
+    }
+    deps.add(activeEffect)
+    activeEffect.deps.push(deps)  
+  }
+  function trigger(target, key) {
+    const depsMap = bucket.get(target)
+    if (!depsMap) return
+    const effects = depsMap.get(key)
+    const effectToRun = new Set()
+    effects && effects.forEach(effectFn => {
+      if (effectFn !== activeEffect) {
+        effectToRun.add(effectFn)
+      }
+    })
+    effectToRun && effectToRun.forEach((fn) => {
+      if (fn.options.scheduler) {
+        fn.options.scheduler(fn)
+      } else {
+        fn()
+      } 
+    })
+  }
+  function cleanup(effectFn) {
+    for (let i = 0; i < effectFn.deps.length; i++) {
+      const deps = effectFn.deps[i]
+      deps.delete(effectFn)
+    }
+    effectFn.deps.length = 0
+  }
+
+  // const proxyObj = reactive({foo: 1})
+  // effect(function() {
+  //   console.info(proxyObj.foo)
+  // }, {
+  //   scheduler(fn) {
+  //     setTimeout(fn)
+  //   }
+  // })
+  // proxyObj.foo++
+  // console.info('结束了')
+
+  const jobQueue = new Set
+  const p = Promise.resolve()
+
+  let isFlusing = false
+  function flushJob() {
+    if (isFlusing) return
+
+    isFlusing = true
+    console.info('同步代码块设置flusing')
+    p.then(() => {
+      console.info('微任务代码块')
+      jobQueue.forEach(job => job())
+    }).finally(() => {
+      isFlusing = false
+    })
+  }
+
+  const proxyObj = reactive({foo: 1})
+  effect(function() {
+    console.info(proxyObj.foo)
+  }, {
+    scheduler(effectFn) {
+      console.info('同步代码块')
+      jobQueue.add(effectFn)
+      flushJob()
+    }
+  })
+  proxyObj.foo++
+  proxyObj.foo++
+  proxyObj.foo++
+  // 
+  
+
+</script>

@@ -1,0 +1,447 @@
+<script>
+  const TextModes = {
+    DATA: 'DATA',
+    RCDATA: 'RCDATA',
+    RAWTEXT: 'RAWTEXT',
+    CDATA: 'CDATA'
+  }
+
+  function parse(str) {
+    const context = {
+      source: str,
+      mode: TextModes.DATA,
+      advanceBy(num) {
+        context.source = context.source.slice(num)
+      },
+      advanceBySpaces() {
+        const match = context.source.match(/^[/t/n/f ]+/)
+        if (match) {
+          context.advanceBy(match[0].length)
+        }
+      }
+    }
+
+    const nodes = parseChildren(context, [])
+    return {
+      type: 'Root',
+      children: nodes
+    }
+  }
+
+  function parseChildren(context, ancestors) {
+    const nodes = []
+    const { mode } = context
+    while (!isEnd(context, ancestors)) {
+      let node 
+      if (mode === TextModes.DATA || mode === TextModes.RCDATA) {
+        if (mode === TextModes.DATA && context.source[0] === '<') {
+          // 注释 结束 标签
+          if (context.source[1] === '!') { // 注释
+
+          } else if (context.source[1] === '/') {
+
+          } else if (/[a-z]/i.test(context.source[1])) {
+            node = parseElement(context, ancestors)
+          }
+        } else if (context.source.startsWith('{{')) {
+          node = parseInterpolation(context)
+        }
+      }
+
+      if (!node) {
+        node = parseText(context, ancestors)
+      }
+
+      nodes.push(node)
+    }
+    return nodes
+  }
+
+  function parseElement(context, ancestors) {
+    const element = parseTag(context)
+    if (element.isSelfClose) return
+
+    if (element.tag === 'textarea' || element.type === 'title') {
+      context.mode = TextModes.RCDATA
+    } else if (/style|xmp|iframe|noembed|noframes|noscript/i.test(element.tag)) {
+      context.mode = TextModes.RAWTEXT
+    } else {
+      context.mode = TextModes.DATA
+    }
+
+    ancestors.push(element)
+    element.children = parseChildren(context, ancestors)
+    ancestors.pop()
+    if (context.source.startsWith(`</${element.tag}`)) {
+      parseTag(context, 'end')
+    } else {
+      console.error('unvaild tag')
+    }
+    return element
+  }
+
+  function parseTag(context, type = 'start') {
+    const { advanceBy, advanceBySpaces } = context
+    const match = type === 'start'
+      ? /^<([a-z][^/t/f/n />]*)/i.exec(context.source)
+      : /^<\/([a-z][^/t/f/n />]*)/i.exec(context.source)
+    advanceBy(match[0].length)
+    advanceBySpaces()
+    const tag = match[1]
+    const props = parseAttribute(context)
+    const isSelfClose = context.source.startsWith('/>')
+    advanceBy(isSelfClose ? 2 : 1)
+    return {
+      type: 'element',
+      tag,
+      props,
+      children: [],
+      isSelfClose
+    }
+  }
+
+  function parseAttribute(context) {
+    const { advanceBy, advanceBySpaces } = context
+    const props = []
+
+    while (!context.source.startsWith('>')
+      && !context.source.startsWith('/>')) {
+        const match = /^[^\t\f\n ][^\t\f\n />=]*/i.exec(context.source)
+        const name = match[0]
+        advanceBy(match[0].length) // 消费属性名
+        advanceBySpaces() // 消费属性名后面可能的空格
+        advanceBy(1) // 消费=
+
+        advanceBySpaces() // 消费=后面可能的空格
+
+        let value = ''
+
+        const quoted = context.source[0]
+        const isQuoted = quoted === "'" || quoted === '"'
+        if (isQuoted) {
+          advanceBy(1) // 消费引号
+          const endQuoted = context.source.indexOf(quoted)
+          if (endQuoted > -1) {
+            value = context.source.slice(0, endQuoted)
+            advanceBy(value.length)
+            advanceBy(1) // 消费结束的引号
+          } else {
+            console.error('缺少引号')
+          }
+        } else {
+          const match = /^[^/n/f/t >]+/i.exec(context.source)
+          value = match[0]
+          advanceBy(value.length) 
+        }
+        advanceBySpaces()
+
+        props.push({
+          type: 'Attribute',
+          name, 
+          value
+        })
+    }
+
+    return props
+  }
+
+  function parseText(context) {
+    let endIndex = context.source.length
+
+    let ltIndex = context.source.indexOf('<')
+    let delimiterIndex = context.source.indexOf('\{\{')
+
+    if (ltIndex > -1 && ltIndex < endIndex) {
+      endIndex = ltIndex
+    }
+
+    if (delimiterIndex > -1 && delimiterIndex < endIndex) {
+      endIndex = delimiterIndex
+    }
+
+    const content = context.source.slice(0, endIndex)
+    context.advanceBy(content.length)
+
+    return {
+      type: 'Text',
+      content
+    }
+  }
+
+  function parseInterpolation(context) {
+    context.advanceBy(2) // 消费\{\{
+    const endIndex = context.source.indexOf('}}')
+    if (endIndex === -1) {
+      console.error('插值表达式没有结束')
+    }
+    const content = context.source.slice(0, endIndex)
+    context.advanceBy(content.length)
+    context.advanceBy(2) // 消费结束标志
+
+    return {
+      type: "Interpolation",
+      content: {
+        type: 'Expression',
+        content
+      }
+    }
+  }
+
+  function isEnd(context, ancestors) {
+    if (!context.source) return true
+    
+    for (let i = 0; i < ancestors.length; i++) {
+      if (context.source.startsWith(`</${ancestors[i].tag}`)) {
+        return true
+      }
+    }
+  }
+  
+  function dump(node, indent = 0) {
+    const type = node.type
+    const desc = node.type === 'root' ? ''
+      : node.type === 'element' ? node.tag : node.content
+    
+    console.info(`${'-'.repeat(indent)}${type}:${desc}`)
+    if (node.children) {
+      node.children.forEach(n => dump(n, indent + 2))
+    }
+  }
+
+  function traverseNode(ast, context) {
+    const currentNode = ast
+    context.currentNode = currentNode
+
+    const fnExits = []
+    for (let i = 0; i < context.nodeTransform.length; i++) {
+      const fn = context.nodeTransform[i](currentNode, context)
+      fnExits.push(fn)
+      if (!context.currentNode) return // 被removeNode之后就不需要处理后续的步
+    }
+
+    if (currentNode.children) {
+      for (let i = 0; i < currentNode.children.length; i++) {
+        context.childIndex = i
+        context.parent = currentNode
+        traverseNode(currentNode.children[i], context)
+      }
+    }
+
+    let l = fnExits.length
+    while(l--) {
+      fnExits[l] && fnExits[l]()
+    }
+  }
+
+  function transform(ast) {
+    const context = {
+      currentNode: null,
+      childIndex: 0,
+      parent: null,
+      replaceNode(node) {
+        context.parent.children[context.childIndex] = node
+        context.currentNode = node
+      },
+      removeNode(node) {
+        if (context.parent) {
+          context.parent.children.splice(context.childIndex, 1)
+          context.currentNode = null
+        }
+      },
+      nodeTransform: [
+        transformRoot,
+        transformElement,
+        transformText
+      ]
+    }
+
+    traverseNode(ast, context)
+    dump(ast)
+  }
+
+
+  function transformText(node, context) {
+
+    return () => {
+      if (node.type !== 'text') return
+      node.jsNode = createStringLiteral(node.content)
+    }
+  }
+
+  function transformElement(node, context) {
+
+    return () => {
+      if (node.type !== 'element') return
+
+      const callExp = createCallExp('h', [
+        createStringLiteral(node.tag)
+      ])
+
+      node.children.length === 1
+        ? callExp.arguments.push(node.children[0].jsNode)
+        : callExp.arguments.push(createArrayExpression(
+          node.children.map(c => c.jsNode)
+        ))
+      
+      node.jsNode = callExp  
+    }
+  }
+
+  function transformRoot(node) {
+    return () => {
+      if (node.type !== 'root') return
+
+      const vnodeJSAST = node.children[0].jsNode
+
+      node.jsNode = {
+        type: 'FunctionDecl',
+        id: {type: 'Identifier', name: 'render'},
+        params: [],
+        body: [
+          {
+            type: 'ReturnStatement',
+            return: vnodeJSAST
+          }
+        ]
+      }
+    }
+  }
+
+  const callExp = {
+    type: 'CallExpression',
+    callee: {
+      type: 'Identifier',
+      name: 'h'
+    },
+    arguments: []
+  }
+
+
+  function createStringLiteral(value) {
+    return {
+      type: 'StringLiteral',
+      value
+    }
+  }
+
+  function createIdentitier(name) {
+    return {
+      type: 'Identifier',
+      name
+    }
+  }
+
+  function createArrayExpression(elements) {
+    return {
+      type: 'ArrayExpression',
+      elements
+    }
+  }
+
+  function createCallExp(callee, arguments) {
+    return {
+      type: 'CallExpression',
+      callee: createIdentitier(callee),
+      arguments
+    }
+  }
+
+  function generate(node) {
+    const context = {
+      code: '',
+      push(code) {
+        context.code += code
+      },
+      currentIndent: 0,
+      newLine() {
+        context.code += '\n' + ` `.repeat(context.currentIndent)
+      },
+      indent() {
+        context.currentIndent++
+        context.newLine()
+      },
+      deIndent() {
+        context.currentIndent--
+        context.newLine()
+      }
+    }
+
+    genNode(node, context)
+
+    return context.code
+  }
+
+  function genNode(node, context) {
+    switch (node.type) {
+      case 'FunctionDecl':
+        genFuntionDecl(node, context)
+        break
+      case 'ReturnStatement':
+        genRetrunStatement(node, context)
+        break
+      case 'CallExpression':
+        genCallExpression(node, context)
+        break
+      case 'StringLiteral':
+        genStringLiteral(node, context)
+        break
+      case 'ArrayExpression':
+        genArrayExpression(node, context)
+        break  
+    }
+  }
+
+  function genFuntionDecl(node, context) {
+    const { push, indent, deIndent } = context
+    push(`function ${node.id.name}`)
+    push('(')
+    genNodeList(node.params, context)
+    push(')')
+    push('{')
+    indent()
+    node.body.forEach(n => genNode(n, context))
+    deIndent()
+    push('}')
+  }
+
+  function genRetrunStatement(node, context) {
+    const { push } = context
+    push('return ')
+    genNode(node.return, context)
+  }
+
+  function genCallExpression(node, context) {
+    const { push } = context
+    const { callee, arguments: args } = node
+    push(`${callee.name}`)
+    push('(')
+    genNodeList(args, context)
+    push(')')
+  }
+  function genStringLiteral(node, context) {
+    const { push } = context
+    push(`'${node.value}'`)
+  }
+
+  function genArrayExpression(node, context) {
+    const { push } = context
+    push('[')
+    genNodeList(node.elements, context)
+    push(']')
+  }
+
+  function genNodeList(nodes, context) {
+    const { push } = context
+    for (let i = 0; i < nodes.length; i++) {
+      if (!nodes[i]) continue
+      genNode(nodes[i], context)
+
+      if (i < nodes.length - 1) {
+        push(',')
+      }
+    }
+  }
+
+  const root = parse('<div>foo {{ bar }} baz</div>')
+  console.info(root)
+</script>

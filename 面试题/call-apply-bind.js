@@ -28,3 +28,38 @@ f.bind(obj, 1, 2)(5)
 
 // f.myCall(obj, 1, 2)
 f.myApply(obj, [1, 2])
+
+function myNew(context, ...args) {
+  const obj = new Object()
+  obj.__proto__ = context.prototype
+  const res = context.call(obj, ...args)
+  return typeof res === 'object'? res : obj
+}
+
+Promise.all = function(promises) {
+  return new Promise((resolve, reject) => {
+    if (typeof promises[Symbol.iterator] !== 'function') {
+      throw new Error('promsies must have iterator')
+    } else {
+
+      let res = []
+      let count = 0
+      let len = promises.length
+      
+      if (len === 0) {
+        resolve(res)
+      }
+
+      for (let i = 0; i < len; i++) {
+        Promise.resolve(promises[i]).then((data) => {
+          res[i] = data
+          if (++count === len) {
+            resolve(res)
+          }
+        }).catch(error => {
+          reject(error)
+        })
+      }
+    }
+  })
+}

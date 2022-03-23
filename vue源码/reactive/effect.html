@@ -1,0 +1,27 @@
+<body></body>
+<script>
+  const obj = { text: 'hello world'}
+  const bucket = new Set()
+  const proxyObj = new Proxy(obj, {
+    get(target, key) {
+      bucket.add(effect)
+      return target[key]
+    },
+    set(target, key, vale) {
+      target[key] = vale
+      bucket.forEach(fn => fn())
+      return true
+    }
+  })
+  function effect() {
+    document.body.innerText = proxyObj.text
+  }
+  effect()
+  // let count = 0
+  // setInterval(() => {
+  //   count++
+  //   console.info('hello')
+  //   proxyObj.text = 'hello vue' + count
+  // }, 1000)
+  
+</script>

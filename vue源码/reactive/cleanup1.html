@@ -1,0 +1,67 @@
+<body></body>
+<script>
+  const bucket = new WeakMap
+  let activeEffect = null
+
+  function reactive(obj) {
+    return new Proxy(obj, {
+      get(target, key) {
+        tracker(target, key)
+        return target[key]
+      },
+      set(target, key, val) { 
+        // trigger(target, key)
+        // target[key] = val
+        // 先触发trigger在设置的是错误的，会导致effect函数执行的时候拿不到新的值。
+        target[key] = val
+        trigger(target, key)
+        return true
+      }
+    })
+  }
+  function effect(fn) {
+    activeEffect = fn
+    fn()
+  }
+  function tracker(target, key) {
+    if (!activeEffect) return
+    let depsMap = bucket.get(target)
+    if (!depsMap) {
+      bucket.set(target, (depsMap = new Map))
+    }
+    let deps = depsMap.get(key)
+    if (!deps) {
+      depsMap.set(key, (deps = new Set))
+    }
+    deps.add(activeEffect)
+  }
+  function trigger(target, key) {
+    const depsMap = bucket.get(target)
+    if (!depsMap) return
+    const effects = depsMap.get(key)
+    effects && effects.forEach(fn => fn())
+  }
+  // const proxyObje = reactive({text: 'hello world'})
+  // effect(() => {
+  //   document.body.innerText = proxyObje.text
+  // })
+
+
+  // 分支切换于cleanup
+  // 1. 什么是分支切换
+  const proxyObj = reactive({
+    ok: true,
+    text: 'hello world'
+  })
+  effect(() => {
+    // 当OK的值为false的时候 obj.text是不执行的, 这就叫分支切换。
+    console.info('effect 分支')
+    document.body.innerText = proxyObj.ok ? proxyObj.text : 'not'  
+  })
+  proxyObj.ok = false
+  // 此时bucket里面仍有2个effectFn，一个是ok一个是text
+  // 会导致不必要的更新比如下面的问题
+  proxyObj.text = 'hello vue3'
+  // 此时document.body.innerText的值仍然为3，但是在console可以看出3个输出
+  
+</script>
